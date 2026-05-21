@@ -1,3 +1,4 @@
+# backend/app/worker/tasks.py
 from celery import shared_task
 from app.db.database import SessionLocal
 from app.db.models import SearchConfig, FoundOpportunity
@@ -5,7 +6,8 @@ from app.services.ebay_client import search_buy_it_now, search_ending_soon_aucti
 from app.services.engine import calculate_arbitrage_profit
 from app.services.notifier import send_discord_alert
 
-@shared_task(name="app.worker.tasks.run_arbitrage_pipeline")
+# Explicitly use the name that FastAPI is sending
+@shared_task(name="tasks.run_arbitrage_pipeline")
 def run_arbitrage_pipeline(config_id: int):
     db = SessionLocal()
     config = db.query(SearchConfig).filter(SearchConfig.id == config_id).first()
@@ -39,7 +41,7 @@ def run_arbitrage_pipeline(config_id: int):
     
     db.close()
 
-@shared_task(name="app.worker.tasks.run_all_configs")
+@shared_task(name="tasks.run_all_configs")
 def run_all_configs():
     db = SessionLocal()
     configs = db.query(SearchConfig).filter(SearchConfig.is_active == True).all()
