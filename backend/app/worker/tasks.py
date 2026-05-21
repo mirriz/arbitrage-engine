@@ -7,6 +7,7 @@ from app.db.models import SearchConfig, FoundOpportunity
 from app.services.engine import evaluate_opportunity, calculate_arbitrage_profit
 from app.services.ebay_client import get_median_sold_price
 from app.services.scraper import scrape_facebook_marketplace
+from app.db.models import SearchConfig
 
 logger = logging.getLogger(__name__)
 
@@ -98,5 +99,17 @@ def run_arbitrage_pipeline(config_id: int):
         db.rollback()
         logger.error(f"Error in arbitrage pipeline: {str(e)}")
         raise e
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.worker.tasks.run_all_configs")
+def run_all_configs():
+    db = SessionLocal()
+    try:
+        active_configs = db.query(SearchConfig).filter(SearchConfig.is_active == True).all()
+        for config in active_configs:
+            # Trigger the individual pipeline asynchronously for each config
+            run_arbitrage_pipeline.delay(config.id)
     finally:
         db.close()

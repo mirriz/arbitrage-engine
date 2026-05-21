@@ -45,3 +45,20 @@ def get_opportunities(config_id: int, db: Session = Depends(get_db)):
     """Fetches all profitable items found for a specific search config."""
     opportunities = db.query(FoundOpportunity).filter(FoundOpportunity.config_id == config_id).all()
     return {"count": len(opportunities), "data": opportunities}
+
+@router.get("/", response_model=list[SearchConfigResponse])
+def get_all_configs(db: Session = Depends(get_db)):
+    """Fetches all search configurations from the database."""
+    return db.query(SearchConfig).all()
+
+@router.delete("/{config_id}")
+def delete_config(config_id: int, db: Session = Depends(get_db)):
+    """Deletes a specific search configuration."""
+    config = db.query(SearchConfig).filter(SearchConfig.id == config_id).first()
+    
+    if not config:
+        raise HTTPException(status_code=404, detail="Configuration not found")
+        
+    db.delete(config)
+    db.commit()
+    return {"message": f"Config {config_id} deleted successfully"}
