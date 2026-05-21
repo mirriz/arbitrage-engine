@@ -14,6 +14,10 @@ def get_median_sold_price(search_term: str, limit: int = 10) -> float:
     Queries the eBay Finding API for recently sold items matching the search term.
     Calculates and returns the median sold price.
     """
+    if EBAY_APP_ID == "MISSING_APP_ID" or not EBAY_APP_ID or EBAY_APP_ID == "your_ebay_production_app_id_here":
+        logger.info(f"Using MOCK eBay data for '{search_term}' while waiting for API key.")
+        return 950.0 
+
     url = "https://svcs.ebay.com/services/search/FindingService/v1"
     
     headers = {

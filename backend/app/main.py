@@ -1,15 +1,23 @@
 # backend/app/main.py
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.api.endpoints import configs
 from app.db.database import Base, engine
-from app.db import models # <-- Added this line so Base sees the models!
+from app.db import models
 
-# Ensure tables are created in the database
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Arbitrage Engine API")
 
-# Register our routes
+# --- NEW: CORS Configuration ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"], # Next.js default port
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(configs.router, prefix="/api/configs", tags=["Configurations"])
 
 @app.get("/health")
