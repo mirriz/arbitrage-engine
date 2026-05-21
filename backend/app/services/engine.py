@@ -1,19 +1,19 @@
 from app.db.models import SearchConfig
 
-EBAY_FEE_PERCENTAGE = 0.1325
+EBAY_FEE_PERCENTAGE = 0.00
 EBAY_FLAT_FEE = 0.30
 
 def calculate_arbitrage_profit(listing_price: float, ebay_median: float, est_shipping: float) -> float:
     """
     Calculates the expected net profit after eBay fees and shipping.
     """
-    ebay_fees = (ebay_median * EBAY_FEE_PERCENTAGE) + EBAY_FLAT_FEE
+    ebay_fees = EBAY_FLAT_FEE
     expected_net_from_ebay = ebay_median - ebay_fees - est_shipping
     net_profit = expected_net_from_ebay - listing_price
     
     return round(net_profit, 2)
 
-def evaluate_opportunity(ebay_listing: dict, ebay_median: float, config: SearchConfig, est_shipping: float = 10.0) -> bool:
+def evaluate_opportunity(ebay_listing: dict, ebay_median: float, config: SearchConfig, est_shipping: float = 5.0) -> bool:
     """
     Evaluates if an active eBay listing meets the user's profit thresholds compared to eBay sold items.
     """

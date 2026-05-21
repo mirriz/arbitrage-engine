@@ -101,6 +101,17 @@ def get_median_sold_price(query: str) -> float:
         "keywords": query,
         "itemFilter(0).name": "SoldItemsOnly",
         "itemFilter(0).value": "true",
+        
+        # --- CLEANSING LAYER 1: API Condition Filtering ---
+        # 1000=New, 1500=Open Box, 2000=Cert. Refurbished, 2500=Seller Refurbished, 3000=Used
+        # This explicitly excludes 7000 (For Parts or Not Working)
+        "itemFilter(1).name": "Condition",
+        "itemFilter(1).value(0)": "1000",
+        "itemFilter(1).value(1)": "1500",
+        "itemFilter(1).value(2)": "2000",
+        "itemFilter(1).value(3)": "2500",
+        "itemFilter(1).value(4)": "3000",
+        
         "sortOrder": "EndTimeSoonest",
         "paginationInput.entriesPerPage": 50 
     }
@@ -121,4 +132,27 @@ def get_median_sold_price(query: str) -> float:
         except (ValueError, IndexError, TypeError):
             continue
             
-    return statistics.median(prices) if prices else 0.0
+    # --- CLEANSING LAYER 2: Interquartile Range (IQR) Filtering ---
+    # We need at least 4 data points to reliably calculate quartiles
+    if len(prices) >= 4:
+        # Sort prices as required for quartile math
+        prices.sort()
+        
+        # Calculate Q1 (25th percentile) and Q3 (75th percentile)
+        q1, _, q3 = statistics.quantiles(prices, n=4)
+        iqr = q3 - q1
+        
+        # Define acceptable bounds using the standard 1.5x multiplier
+        lower_bound = q1 - (1.5 * iqr)
+        upper_bound = q3 + (1.5 * iqr)
+        
+        # Filter the raw prices against the bounds
+        cleaned_prices = [p for p in prices if lower_bound <= p <= upper_bound]
+        
+        # Fallback to raw prices if IQR filtering somehow removes everything
+        if not cleaned_prices:
+            cleaned_prices = prices
+    else:
+        cleaned_prices = prices
+            
+    return statistics.median(cleaned_prices) if cleaned_prices else 0.0
