@@ -5,6 +5,8 @@ from app.worker.celery_app import celery_app
 from app.db.database import SessionLocal
 from app.db.models import SearchConfig, FoundOpportunity
 from app.services.engine import evaluate_opportunity, calculate_arbitrage_profit
+from app.services.ebay_client import get_median_sold_price
+from app.services.scraper import scrape_facebook_marketplace
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +47,20 @@ def run_arbitrage_pipeline(config_id: int):
         if not config:
             logger.info(f"Config ID {config_id} not found or inactive. Aborting task.")
             return f"Config {config_id} unavailable."
+
+
+        listings = scrape_facebook_marketplace(config.search_term)
         
-        # 2. Fire the scraper
-        listings = mock_fb_scraper(config.search_term)
+        if not listings:
+            logger.warning(f"No listings found on Facebook for {config.search_term}")
+            return "No Facebook data found."
         
         # 3. Get true market value from eBay
-        ebay_median = mock_ebay_valuation(config.search_term)
+        ebay_median = get_median_sold_price(config.search_term)
+        
+        if ebay_median == 0.0:
+            logger.warning(f"Skipping evaluation for {config.search_term} due to lack of eBay data.")
+            return "No eBay market data found."
         
         opportunities_found = 0
         
