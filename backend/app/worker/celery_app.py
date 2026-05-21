@@ -25,10 +25,3 @@ celery_app.conf.update(
     # Automatically look for tasks inside app.worker.tasks
     include=["app.worker.tasks"]
 )
-
-celery_app.conf.beat_schedule = {
-    'run-all-active-configs-every-15-mins': {
-        'task': 'app.worker.tasks.run_all_configs', # We will create this task next
-        'schedule': crontab(minute='*/15'), # Runs every 15 minutes
-    },
-}
