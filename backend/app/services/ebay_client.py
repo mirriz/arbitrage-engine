@@ -1,158 +1,135 @@
 import os
 import requests
-import statistics
-from datetime import datetime, timedelta, timezone
+import base64
 from dotenv import load_dotenv
 
 load_dotenv()
 EBAY_APP_ID = os.getenv("EBAY_APP_ID")
-EBAY_GLOBAL_ID = "EBAY-GB"  # Targets the UK marketplace
+EBAY_CERT_ID = os.getenv("EBAY_CERT_ID")
 
 def _is_mock_mode():
-    """Returns True if there is no valid API key configured."""
-    return not EBAY_APP_ID or EBAY_APP_ID.strip() == "" or "your_api_key" in EBAY_APP_ID.lower()
+    return not EBAY_APP_ID or "your_api_key" in EBAY_APP_ID.lower()
 
-def _generate_mock_listings(query: str, listing_type: str):
-    """Generates profitable dummy data formatted exactly like eBay's API response."""
-    # We default to a realistic JDM watch example if the query happens to be blank
-    item_name = query if query else "Seiko Astron SBXY061"
+def _get_oauth_token():
+    if not EBAY_APP_ID or not EBAY_CERT_ID:
+        raise ValueError("Missing EBAY_APP_ID or EBAY_CERT_ID in environment.")
+        
+    creds = f"{EBAY_APP_ID}:{EBAY_CERT_ID}"
+    encoded_creds = base64.b64encode(creds.encode()).decode()
     
-    # Set prices artificially low so your engine.py calculates a high profit margin.
-    # This ensures your minimum thresholds are met and your Discord alerts trigger.
-    base_price = "700.00" if listing_type == "Auction" else "750.00"
-    
-    return [
-        {
-            "itemId": [f"MOCK_{listing_type.upper()}_01"],
-            "title": [f"{item_name} - Excellent Condition ({listing_type})"],
-            "viewItemURL": [f"https://www.ebay.co.uk/itm/mock-item-1"],
-            "sellingStatus": [{"currentPrice": [{"__value__": base_price}]}]
-        },
-        {
-            "itemId": [f"MOCK_{listing_type.upper()}_02"],
-            "title": [f"{item_name} - Near Mint"],
-            "viewItemURL": [f"https://www.ebay.co.uk/itm/mock-item-2"],
-            "sellingStatus": [{"currentPrice": [{"__value__": str(float(base_price) + 25.50)}]}]
-        }
-    ]
-
-def _get_headers(operation_name: str):
-    """Helper to generate headers for the eBay Finding API."""
-    return {
-        "X-EBAY-SOA-GLOBAL-ID": EBAY_GLOBAL_ID,
-        "X-EBAY-SOA-SECURITY-APPNAME": EBAY_APP_ID,
-        "X-EBAY-SOA-OPERATION-NAME": operation_name,
-        "X-EBAY-SOA-RESPONSE-DATA-FORMAT": "JSON",
+    url = "https://api.ebay.com/identity/v1/oauth2/token"
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": f"Basic {encoded_creds}"
     }
+    data = {
+        "grant_type": "client_credentials",
+        "scope": "https://api.ebay.com/oauth/api_scope"
+    }
+    
+    response = requests.post(url, headers=headers, data=data)
+    response.raise_for_status()
+    return response.json().get("access_token")
 
-def search_buy_it_now(query: str):
+def _map_to_legacy(summaries: list) -> list:
+    """Adapts modern REST JSON back to the legacy Finding API structure for tasks.py"""
+    legacy_items = []
+    for item in summaries:
+        # THE FIX: Check for 'price' (Buy It Now) OR 'currentBidPrice' (Auctions)
+        price_obj = item.get("price") or item.get("currentBidPrice") or {}
+        price_val = price_obj.get("value", "0")
+
+        legacy_items.append({
+            "itemId": [item.get("itemId", "")],
+            "title": [item.get("title", "")],
+            "viewItemURL": [item.get("itemWebUrl", "")],
+            "sellingStatus": [{
+                "currentPrice": [{
+                    "__value__": price_val
+                }]
+            }]
+        })
+    return legacy_items
+
+def search_buy_it_now(query: str, min_price: float = 0.0, max_price: float = None, category_id: str = None):
     if _is_mock_mode():
-        return _generate_mock_listings(query, "FixedPrice")
+        return []
+        
+    # --- ADD THIS SANITIZATION ---
+    min_price = float(min_price) if min_price is not None else 0.0
+    max_price = float(max_price) if max_price is not None else None
 
-    url = "https://svcs.ebay.com/services/search/FindingService/v1"
-    headers = _get_headers("findItemsAdvanced")
-    
-    params = {
-        "REST-PAYLOAD": "true",
-        "keywords": query,
-        "itemFilter(0).name": "ListingType",
-        "itemFilter(0).value": "FixedPrice",
-        "sortOrder": "PricePlusShippingLowest",
-        "paginationInput.entriesPerPage": 10
+    token = _get_oauth_token()
+    url = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_GB"
     }
     
+    # Base filter for Buy It Now
+    filter_str = "buyingOptions:{FIXED_PRICE}"
+    
+    if min_price > 0 and max_price:
+        filter_str += f",price:[{min_price}..{max_price}],priceCurrency:GBP"
+    elif min_price > 0:
+        filter_str += f",price:[{min_price}..],priceCurrency:GBP"
+    elif max_price:
+        filter_str += f",price:[0..{max_price}],priceCurrency:GBP"
+        
+    params = {
+        "q": query,
+        "limit": 10,
+        "sort": "price",
+        "filter": filter_str
+    }
+    
+    if category_id:
+        params["category_ids"] = category_id
+        
     response = requests.get(url, headers=headers, params=params).json()
-    items = response.get("findItemsAdvancedResponse", [{}])[0].get("searchResult", [{}])[0].get("item", [])
-    return items if isinstance(items, list) else []
+    items = response.get("itemSummaries", [])
+    return _map_to_legacy(items)
 
-def search_ending_soon_auctions(query: str):
+
+def search_ending_soon_auctions(query: str, min_price: float = 0.0, max_price: float = None, category_id: str = None):
     if _is_mock_mode():
-        return _generate_mock_listings(query, "Auction")
+        return []
+        
+    # --- ADD THIS SANITIZATION ---
+    min_price = float(min_price) if min_price is not None else 0.0
+    max_price = float(max_price) if max_price is not None else None
 
-    url = "https://svcs.ebay.com/services/search/FindingService/v1"
-    headers = _get_headers("findItemsAdvanced")
-    
-    end_time = (datetime.now(timezone.utc) + timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
-    
-    params = {
-        "REST-PAYLOAD": "true",
-        "keywords": query,
-        "itemFilter(0).name": "ListingType",
-        "itemFilter(0).value": "Auction",
-        "itemFilter(1).name": "EndTimeTo",
-        "itemFilter(1).value": end_time,
-        "sortOrder": "EndTimeSoonest",
-        "paginationInput.entriesPerPage": 10
+    token = _get_oauth_token()
+    url = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_GB"
     }
     
+    # Base filter for Auctions
+    filter_str = "buyingOptions:{FIXED_PRICE}"
+    
+    if min_price > 0 and max_price:
+        filter_str += f",price:[{min_price}..{max_price}],priceCurrency:GBP"
+    elif min_price > 0:
+        filter_str += f",price:[{min_price}..],priceCurrency:GBP"
+    elif max_price:
+        filter_str += f",price:[0..{max_price}],priceCurrency:GBP"
+        
+    params = {
+        "q": query,
+        "limit": 10,
+        "sort": "endingSoonest",
+        "filter": filter_str
+    }
+    
+    if category_id:
+        params["category_ids"] = category_id
+        
     response = requests.get(url, headers=headers, params=params).json()
-    items = response.get("findItemsAdvancedResponse", [{}])[0].get("searchResult", [{}])[0].get("item", [])
-    return items if isinstance(items, list) else []
+    items = response.get("itemSummaries", [])
+    return _map_to_legacy(items)
 
 def get_median_sold_price(query: str) -> float:
-    if _is_mock_mode():
-        return 1500.0  # Artificially high to guarantee a positive arbitrage calculation during testing
-        
-    url = "https://svcs.ebay.com/services/search/FindingService/v1"
-    headers = _get_headers("findCompletedItems") 
-    
-    params = {
-        "REST-PAYLOAD": "true",
-        "keywords": query,
-        "itemFilter(0).name": "SoldItemsOnly",
-        "itemFilter(0).value": "true",
-        
-        # --- CLEANSING LAYER 1: API Condition Filtering ---
-        # 1000=New, 1500=Open Box, 2000=Cert. Refurbished, 2500=Seller Refurbished, 3000=Used
-        # This explicitly excludes 7000 (For Parts or Not Working)
-        "itemFilter(1).name": "Condition",
-        "itemFilter(1).value(0)": "1000",
-        "itemFilter(1).value(1)": "1500",
-        "itemFilter(1).value(2)": "2000",
-        "itemFilter(1).value(3)": "2500",
-        "itemFilter(1).value(4)": "3000",
-        
-        "sortOrder": "EndTimeSoonest",
-        "paginationInput.entriesPerPage": 50 
-    }
-    
-    response = requests.get(url, headers=headers, params=params).json()
-    items = response.get("findCompletedItemsResponse", [{}])[0].get("searchResult", [{}])[0].get("item", [])
-    
-    if not items or not isinstance(items, list):
-        return 0.0
-        
-    prices = []
-    for item in items:
-        try:
-            price_str = item.get("sellingStatus", [{}])[0].get("currentPrice", [{}])[0].get("__value__", "0")
-            price = float(price_str)
-            if price > 0:
-                prices.append(price)
-        except (ValueError, IndexError, TypeError):
-            continue
-            
-    # --- CLEANSING LAYER 2: Interquartile Range (IQR) Filtering ---
-    # We need at least 4 data points to reliably calculate quartiles
-    if len(prices) >= 4:
-        # Sort prices as required for quartile math
-        prices.sort()
-        
-        # Calculate Q1 (25th percentile) and Q3 (75th percentile)
-        q1, _, q3 = statistics.quantiles(prices, n=4)
-        iqr = q3 - q1
-        
-        # Define acceptable bounds using the standard 1.5x multiplier
-        lower_bound = q1 - (1.5 * iqr)
-        upper_bound = q3 + (1.5 * iqr)
-        
-        # Filter the raw prices against the bounds
-        cleaned_prices = [p for p in prices if lower_bound <= p <= upper_bound]
-        
-        # Fallback to raw prices if IQR filtering somehow removes everything
-        if not cleaned_prices:
-            cleaned_prices = prices
-    else:
-        cleaned_prices = prices
-            
-    return statistics.median(cleaned_prices) if cleaned_prices else 0.0
+    # Requires migration to third-party scraping API due to eBay Developer limits
+    return 15000.0

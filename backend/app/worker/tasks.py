@@ -14,7 +14,24 @@ def run_arbitrage_pipeline(config_id: int):
         if not config: 
             return
 
-        listings = search_buy_it_now(config.search_term) + search_ending_soon_auctions(config.search_term)
+        # Fetch active inventory using dynamic parameters from the database
+        bin_listings = search_buy_it_now(
+            query=config.search_term, 
+            min_price=config.min_listing_price,
+            max_price=config.max_listing_price,
+            category_id=config.category_id
+        )
+        
+        auction_listings = search_ending_soon_auctions(
+            query=config.search_term, 
+            min_price=config.min_listing_price,
+            max_price=config.max_listing_price,
+            category_id=config.category_id
+        )
+        
+        listings = bin_listings + auction_listings
+        
+        # Determine current median value
         ebay_median = get_median_sold_price(config.search_term)
 
         for item in listings:
@@ -23,10 +40,9 @@ def run_arbitrage_pipeline(config_id: int):
             url = item["viewItemURL"][0]
             item_id = item["itemId"][0]
             
-            # --- THE FIX: Check if we have already found this listing ---
             existing_opportunity = db.query(FoundOpportunity).filter(FoundOpportunity.fb_listing_id == item_id).first()
             if existing_opportunity:
-                continue  # Skip to the next item, we already alerted on this one
+                continue 
             
             profit = calculate_arbitrage_profit(price, ebay_median, est_shipping=15.0)
             
@@ -43,17 +59,14 @@ def run_arbitrage_pipeline(config_id: int):
                 )
                 db.add(opportunity)
                 
-                # Use a nested try-except for the commit to handle any unexpected DB locks
                 try:
                     db.commit()
-                    # Only send the alert IF the database save was successful
                     send_discord_alert(title, price, ebay_median, profit, url, config.search_term)
                 except Exception as e:
                     db.rollback()
                     print(f"Failed to save opportunity {item_id}: {e}")
                     
     finally:
-        # Always ensure the database connection is closed, even if an error occurs
         db.close()
 
 @shared_task(name="tasks.run_all_configs")

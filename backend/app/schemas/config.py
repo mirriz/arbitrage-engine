@@ -6,6 +6,12 @@ class SearchConfigBase(BaseModel):
     search_term: str
     min_profit_percentage: float = 20.0
     min_profit_flat: float = 15.0
+    
+    # --- NEW: Dynamic Filtering Fields ---
+    min_listing_price: float = 0.0
+    max_listing_price: Optional[float] = None
+    category_id: Optional[str] = None
+    
     is_active: bool = True
 
 class SearchConfigCreate(SearchConfigBase):

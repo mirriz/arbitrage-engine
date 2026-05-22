@@ -7,6 +7,11 @@ export default function Dashboard() {
   const [minProfitPct, setMinProfitPct] = useState(20);
   const [minProfitFlat, setMinProfitFlat] = useState(15);
   
+  // --- NEW: State for Dynamic Filtering ---
+  const [minListingPrice, setMinListingPrice] = useState<number | "">("");
+  const [maxListingPrice, setMaxListingPrice] = useState<number | "">("");
+  const [categoryId, setCategoryId] = useState("");
+  
   const [configs, setConfigs] = useState<any[]>([]);
   const [activeConfigId, setActiveConfigId] = useState<number | null>(null); 
   const [opportunities, setOpportunities] = useState<any[]>([]);
@@ -27,29 +32,40 @@ export default function Dashboard() {
 
   const handleAddConfig = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Construct payload, converting empty strings back to null/0 for the backend
+    const payload = {
+      search_term: searchTerm, 
+      min_profit_percentage: minProfitPct, 
+      min_profit_flat: minProfitFlat, 
+      min_listing_price: minListingPrice === "" ? 0 : Number(minListingPrice),
+      max_listing_price: maxListingPrice === "" ? null : Number(maxListingPrice),
+      category_id: categoryId === "" ? null : categoryId,
+      is_active: true 
+    };
+
     await fetch("http://127.0.0.1:8000/api/configs/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ 
-        search_term: searchTerm, 
-        min_profit_percentage: minProfitPct, 
-        min_profit_flat: minProfitFlat, 
-        is_active: true 
-      })
+      body: JSON.stringify(payload)
     });
+    
+    // Reset form
     setSearchTerm("");
+    setMinListingPrice("");
+    setMaxListingPrice("");
+    setCategoryId("");
     fetchConfigs();
   };
 
   const handleDeleteConfig = async (id: number, e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent triggering the row click
+    e.stopPropagation(); 
     if (!confirm("Are you sure you want to delete this target?")) return;
     
     try {
       await fetch(`http://127.0.0.1:8000/api/configs/${id}`, { method: "DELETE" });
       fetchConfigs();
       
-      // Clear the opportunities view if we delete the currently active config
       if (activeConfigId === id) {
         setActiveConfigId(null);
         setOpportunities([]);
@@ -95,7 +111,7 @@ export default function Dashboard() {
                   <label className="block text-sm font-medium text-gray-400 mb-1">Search Term</label>
                   <input 
                     type="text" 
-                    placeholder="e.g. Nintendo Switch OLED" 
+                    placeholder="e.g. Seiko Astron" 
                     value={searchTerm} 
                     onChange={(e) => setSearchTerm(e.target.value)} 
                     className="w-full bg-gray-700 border border-gray-600 text-white p-2 rounded focus:ring focus:ring-blue-500 focus:outline-none" 
@@ -105,7 +121,45 @@ export default function Dashboard() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-400 mb-1">Min Profit (%)</label>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">Min Price (£)</label>
+                    <input 
+                      type="number"
+                      placeholder="e.g. 150"
+                      min="0"
+                      step="0.01"
+                      value={minListingPrice} 
+                      onChange={(e) => setMinListingPrice(e.target.value === "" ? "" : Number(e.target.value))} 
+                      className="w-full bg-gray-700 border border-gray-600 text-white p-2 rounded focus:ring focus:ring-blue-500 focus:outline-none" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">Max Price (£)</label>
+                    <input 
+                      type="number"
+                      placeholder="Optional"
+                      min="0"
+                      step="0.01"
+                      value={maxListingPrice} 
+                      onChange={(e) => setMaxListingPrice(e.target.value === "" ? "" : Number(e.target.value))} 
+                      className="w-full bg-gray-700 border border-gray-600 text-white p-2 rounded focus:ring focus:ring-blue-500 focus:outline-none" 
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">eBay Category ID</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g. 31387 (Wristwatches)" 
+                    value={categoryId} 
+                    onChange={(e) => setCategoryId(e.target.value)} 
+                    className="w-full bg-gray-700 border border-gray-600 text-white p-2 rounded focus:ring focus:ring-blue-500 focus:outline-none" 
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 border-t border-gray-700 pt-4 mt-2">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">Target Margin (%)</label>
                     <input 
                       type="number" 
                       value={minProfitPct} 
@@ -114,7 +168,7 @@ export default function Dashboard() {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-400 mb-1">Min Profit (£)</label>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">Target Margin (£)</label>
                     <input 
                       type="number" 
                       value={minProfitFlat} 
@@ -123,6 +177,7 @@ export default function Dashboard() {
                     />
                   </div>
                 </div>
+
                 <button className="w-full bg-blue-600 text-white p-2 rounded font-bold hover:bg-blue-700 transition-colors mt-2">
                   Save Target
                 </button>

@@ -1,4 +1,3 @@
-# backend/app/db/models.py
 from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -12,30 +11,32 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     subscription_tier = Column(String, default="free")
     
-    # Added cascade to users as well, just in case you delete a user later
     configs = relationship("SearchConfig", back_populates="owner", cascade="all, delete-orphan")
 
 class SearchConfig(Base):
     __tablename__ = "search_configs"
     
     id = Column(Integer, primary_key=True, index=True)
-    # Added ondelete="CASCADE" for database-level protection
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True) 
     search_term = Column(String, nullable=False)
+    
+    # --- Dynamic Filtering Constraints ---
+    min_listing_price = Column(Float, default=0.0)
+    max_listing_price = Column(Float, nullable=True)
+    category_id = Column(String, nullable=True)
+    
+    # --- Profit Margins ---
     min_profit_percentage = Column(Float, default=20.0) 
     min_profit_flat = Column(Float, default=15.0)       
     is_active = Column(Boolean, default=True)
     
     owner = relationship("User", back_populates="configs")
-    
-    # THE FIX: cascade="all, delete-orphan" tells SQLAlchemy to delete child opportunities
     opportunities = relationship("FoundOpportunity", back_populates="config", cascade="all, delete-orphan")
 
 class FoundOpportunity(Base):
     __tablename__ = "found_opportunities"
     
     id = Column(Integer, primary_key=True, index=True)
-    # Added ondelete="CASCADE" for database-level protection
     config_id = Column(Integer, ForeignKey("search_configs.id", ondelete="CASCADE"))
     fb_listing_id = Column(String, unique=True, index=True, nullable=False)
     fb_title = Column(String, nullable=False)
