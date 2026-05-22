@@ -32,10 +32,8 @@ def _get_oauth_token():
     return response.json().get("access_token")
 
 def _map_to_legacy(summaries: list) -> list:
-    """Adapts modern REST JSON back to the legacy Finding API structure for tasks.py"""
     legacy_items = []
     for item in summaries:
-        # THE FIX: Check for 'price' (Buy It Now) OR 'currentBidPrice' (Auctions)
         price_obj = item.get("price") or item.get("currentBidPrice") or {}
         price_val = price_obj.get("value", "0")
 
@@ -43,6 +41,8 @@ def _map_to_legacy(summaries: list) -> list:
             "itemId": [item.get("itemId", "")],
             "title": [item.get("title", "")],
             "viewItemURL": [item.get("itemWebUrl", "")],
+            # --- NEW: Extract the listing's end date ---
+            "endTime": [item.get("itemEndDate", "")], 
             "sellingStatus": [{
                 "currentPrice": [{
                     "__value__": price_val
@@ -54,8 +54,7 @@ def _map_to_legacy(summaries: list) -> list:
 def search_buy_it_now(query: str, min_price: float = 0.0, max_price: float = None, category_id: str = None):
     if _is_mock_mode():
         return []
-        
-    # --- ADD THIS SANITIZATION ---
+
     min_price = float(min_price) if min_price is not None else 0.0
     max_price = float(max_price) if max_price is not None else None
 
@@ -66,7 +65,6 @@ def search_buy_it_now(query: str, min_price: float = 0.0, max_price: float = Non
         "X-EBAY-C-MARKETPLACE-ID": "EBAY_GB"
     }
     
-    # Base filter for Buy It Now
     filter_str = "buyingOptions:{FIXED_PRICE}"
     
     if min_price > 0 and max_price:
@@ -90,12 +88,10 @@ def search_buy_it_now(query: str, min_price: float = 0.0, max_price: float = Non
     items = response.get("itemSummaries", [])
     return _map_to_legacy(items)
 
-
 def search_ending_soon_auctions(query: str, min_price: float = 0.0, max_price: float = None, category_id: str = None):
     if _is_mock_mode():
         return []
-        
-    # --- ADD THIS SANITIZATION ---
+
     min_price = float(min_price) if min_price is not None else 0.0
     max_price = float(max_price) if max_price is not None else None
 
@@ -106,8 +102,7 @@ def search_ending_soon_auctions(query: str, min_price: float = 0.0, max_price: f
         "X-EBAY-C-MARKETPLACE-ID": "EBAY_GB"
     }
     
-    # Base filter for Auctions
-    filter_str = "buyingOptions:{FIXED_PRICE}"
+    filter_str = "buyingOptions:{AUCTION}"
     
     if min_price > 0 and max_price:
         filter_str += f",price:[{min_price}..{max_price}],priceCurrency:GBP"
@@ -118,7 +113,8 @@ def search_ending_soon_auctions(query: str, min_price: float = 0.0, max_price: f
         
     params = {
         "q": query,
-        "limit": 10,
+        # --- CHANGED: Increase from 10 to 50 to get a larger pool of auctions ---
+        "limit": 50, 
         "sort": "endingSoonest",
         "filter": filter_str
     }
@@ -129,7 +125,3 @@ def search_ending_soon_auctions(query: str, min_price: float = 0.0, max_price: f
     response = requests.get(url, headers=headers, params=params).json()
     items = response.get("itemSummaries", [])
     return _map_to_legacy(items)
-
-def get_median_sold_price(query: str) -> float:
-    # Requires migration to third-party scraping API due to eBay Developer limits
-    return 15000.0

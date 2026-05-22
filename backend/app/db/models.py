@@ -20,12 +20,10 @@ class SearchConfig(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True) 
     search_term = Column(String, nullable=False)
     
-    # --- Dynamic Filtering Constraints ---
     min_listing_price = Column(Float, default=0.0)
     max_listing_price = Column(Float, nullable=True)
     category_id = Column(String, nullable=True)
     
-    # --- Profit Margins ---
     min_profit_percentage = Column(Float, default=20.0) 
     min_profit_flat = Column(Float, default=15.0)       
     is_active = Column(Boolean, default=True)
@@ -42,7 +40,10 @@ class FoundOpportunity(Base):
     fb_title = Column(String, nullable=False)
     fb_price = Column(Float, nullable=False)
     fb_url = Column(String, nullable=False)
-    ebay_median_sold = Column(Float, nullable=False)
+    
+    # --- CHANGED: Now reflects the active BIN floor, not historical sold data ---
+    market_floor_price = Column(Float, nullable=False) 
+    
     calculated_profit = Column(Float, nullable=False)
     status = Column(String, default="New") 
     created_at = Column(DateTime, default=datetime.utcnow)
