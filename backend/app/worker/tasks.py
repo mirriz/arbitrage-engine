@@ -1,11 +1,11 @@
-from celery import shared_task
+from app.worker.celery_app import celery_app
 from app.db.database import SessionLocal
 from app.db.models import SearchConfig, FoundOpportunity
 from app.services.ebay_client import search_buy_it_now, search_ending_soon_auctions, get_median_sold_price
-from app.services.engine import calculate_arbitrage_profit
+from app.services.engine import calculate_arbitrage_profit, evaluate_opportunity
 from app.services.notifier import send_discord_alert
 
-@shared_task(name="tasks.run_arbitrage_pipeline")
+@celery_app.task(name="tasks.run_arbitrage_pipeline")
 def run_arbitrage_pipeline(config_id: int):
     db = SessionLocal()
     
@@ -23,14 +23,15 @@ def run_arbitrage_pipeline(config_id: int):
             url = item["viewItemURL"][0]
             item_id = item["itemId"][0]
             
-            # --- THE FIX: Check if we have already found this listing ---
             existing_opportunity = db.query(FoundOpportunity).filter(FoundOpportunity.fb_listing_id == item_id).first()
             if existing_opportunity:
-                continue  # Skip to the next item, we already alerted on this one
+                continue
+                
+            # Use evaluate_opportunity to respect the new min_item_price and margins
+            is_good = evaluate_opportunity(item, ebay_median, config, est_shipping=5.0)
             
-            profit = calculate_arbitrage_profit(price, ebay_median, est_shipping=15.0)
-            
-            if profit >= config.min_profit_flat:
+            if is_good:
+                profit = calculate_arbitrage_profit(price, ebay_median, est_shipping=5.0)
                 opportunity = FoundOpportunity(
                     config_id=config.id,
                     fb_listing_id=item_id,
@@ -43,20 +44,17 @@ def run_arbitrage_pipeline(config_id: int):
                 )
                 db.add(opportunity)
                 
-                # Use a nested try-except for the commit to handle any unexpected DB locks
                 try:
                     db.commit()
-                    # Only send the alert IF the database save was successful
                     send_discord_alert(title, price, ebay_median, profit, url, config.search_term)
                 except Exception as e:
                     db.rollback()
                     print(f"Failed to save opportunity {item_id}: {e}")
                     
     finally:
-        # Always ensure the database connection is closed, even if an error occurs
         db.close()
 
-@shared_task(name="tasks.run_all_configs")
+@celery_app.task(name="tasks.run_all_configs")
 def run_all_configs():
     db = SessionLocal()
     try:

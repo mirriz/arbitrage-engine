@@ -6,6 +6,7 @@ export default function Dashboard() {
   const [searchTerm, setSearchTerm] = useState("");
   const [minProfitPct, setMinProfitPct] = useState(20);
   const [minProfitFlat, setMinProfitFlat] = useState(15);
+  const [minItemPrice, setMinItemPrice] = useState(0); // NEW FIELD
   
   const [configs, setConfigs] = useState<any[]>([]);
   const [activeConfigId, setActiveConfigId] = useState<number | null>(null); 
@@ -19,37 +20,47 @@ export default function Dashboard() {
 
   const fetchConfigs = async () => {
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/configs/");
+      const res = await fetch("http://localhost:8000/api/configs/");
       const data = await res.json();
-      setConfigs(data);
-    } catch (err) { console.error("Failed to fetch configs:", err); }
+      
+      if (Array.isArray(data)) {
+        setConfigs(data);
+      } else {
+        console.error("Expected array but got:", data);
+        setConfigs([]);
+      }
+    } catch (err) { 
+        console.error("Failed to fetch configs:", err); 
+        setConfigs([]);
+    }
   };
 
   const handleAddConfig = async (e: React.FormEvent) => {
     e.preventDefault();
-    await fetch("http://127.0.0.1:8000/api/configs/", {
+    await fetch("http://localhost:8000/api/configs/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ 
         search_term: searchTerm, 
         min_profit_percentage: minProfitPct, 
         min_profit_flat: minProfitFlat, 
+        min_item_price: minItemPrice,
         is_active: true 
       })
     });
     setSearchTerm("");
+    setMinItemPrice(0);
     fetchConfigs();
   };
 
   const handleDeleteConfig = async (id: number, e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent triggering the row click
+    e.stopPropagation(); 
     if (!confirm("Are you sure you want to delete this target?")) return;
     
     try {
-      await fetch(`http://127.0.0.1:8000/api/configs/${id}`, { method: "DELETE" });
+      await fetch(`http://localhost:8000/api/configs/${id}`, { method: "DELETE" });
       fetchConfigs();
       
-      // Clear the opportunities view if we delete the currently active config
       if (activeConfigId === id) {
         setActiveConfigId(null);
         setOpportunities([]);
@@ -60,7 +71,7 @@ export default function Dashboard() {
   const fetchOpportunities = async (id: number) => {
     setLoading(true);
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/configs/${id}/opportunities`);
+      const res = await fetch(`http://localhost:8000/api/configs/${id}/opportunities`);
       const data = await res.json();
       setOpportunities(data.data || []);
     } catch (err) { console.error(err); }
@@ -71,7 +82,7 @@ export default function Dashboard() {
     e.stopPropagation();
     setRunningConfigId(id);
     setActiveConfigId(id);
-    await fetch(`http://127.0.0.1:8000/api/configs/${id}/run`, { method: "POST" });
+    await fetch(`http://localhost:8000/api/configs/${id}/run`, { method: "POST" });
     setTimeout(() => setRunningConfigId(null), 2000);
   };
 
@@ -123,6 +134,20 @@ export default function Dashboard() {
                     />
                   </div>
                 </div>
+
+                {/* NEW MIN ITEM PRICE FIELD */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">Min Item Price Filter (£)</label>
+                  <input 
+                    type="number" 
+                    value={minItemPrice} 
+                    onChange={(e) => setMinItemPrice(Number(e.target.value))}
+                    placeholder="Ignore listings below..."
+                    className="w-full bg-gray-700 border border-gray-600 text-white p-2 rounded focus:ring focus:ring-blue-500 focus:outline-none" 
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Filters out cheap accessories/straps</p>
+                </div>
+
                 <button className="w-full bg-blue-600 text-white p-2 rounded font-bold hover:bg-blue-700 transition-colors mt-2">
                   Save Target
                 </button>
@@ -142,7 +167,12 @@ export default function Dashboard() {
                     }`} 
                     onClick={() => setActiveConfigId(c.id)}
                   >
-                    <span className="font-medium text-gray-200">{c.search_term}</span>
+                    <div className="flex flex-col">
+                        <span className="font-medium text-gray-200">{c.search_term}</span>
+                        {c.min_item_price > 0 && (
+                            <span className="text-xs text-gray-400">Min Price: £{c.min_item_price}</span>
+                        )}
+                    </div>
                     <div className="flex gap-2">
                       <button 
                         onClick={(e) => handleRunSingleCheck(c.id, e)} 

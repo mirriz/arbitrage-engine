@@ -17,12 +17,10 @@ def evaluate_opportunity(ebay_listing: dict, ebay_median: float, config: SearchC
     """
     Evaluates if an active eBay listing meets the user's profit thresholds compared to eBay sold items.
     """
-    # If we couldn't find comparable sold items to establish a median, reject
     if ebay_median <= 0:
         return False
         
     try:
-        # Extract the current listing price from eBay's JSON payload
         price_str = ebay_listing.get("sellingStatus", [{}])[0].get("currentPrice", [{}])[0].get("__value__", "0")
         listing_price = float(price_str)
     except (ValueError, IndexError, TypeError):
@@ -31,14 +29,16 @@ def evaluate_opportunity(ebay_listing: dict, ebay_median: float, config: SearchC
     if listing_price <= 0:
         return False
         
-    # 1. Calculate raw profit
+    # NEW CHECK: Min Item Price Filter to exclude cheap accessories/straps
+    if listing_price < config.min_item_price:
+        return False
+
+    print(listing_price, ebay_median, est_shipping)
     profit = calculate_arbitrage_profit(listing_price, ebay_median, est_shipping)
     
-    # 2. Check flat margin requirement
     if profit < config.min_profit_flat:
         return False
         
-    # 3. Check percentage margin requirement
     total_investment = listing_price + est_shipping
     if total_investment > 0:
         profit_percentage = (profit / total_investment) * 100

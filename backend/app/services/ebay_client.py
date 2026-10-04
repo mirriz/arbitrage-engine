@@ -1,26 +1,28 @@
 import os
 import requests
+import base64
 import statistics
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 load_dotenv()
 EBAY_APP_ID = os.getenv("EBAY_APP_ID")
-EBAY_GLOBAL_ID = "EBAY-GB"  # Targets the UK marketplace
+EBAY_CERT_ID = os.getenv("EBAY_CERT_ID")
+COMPSNIPER_API_KEY = os.getenv("COMPSNIPER_API_KEY")
 
 def _is_mock_mode():
     """Returns True if there is no valid API key configured."""
-    return not EBAY_APP_ID or EBAY_APP_ID.strip() == "" or "your_api_key" in EBAY_APP_ID.lower()
+    return (
+        not EBAY_APP_ID or 
+        not EBAY_CERT_ID or 
+        "your_api_key" in EBAY_APP_ID.lower() or 
+        EBAY_CERT_ID.strip() == ""
+    )
 
 def _generate_mock_listings(query: str, listing_type: str):
-    """Generates profitable dummy data formatted exactly like eBay's API response."""
-    # We default to a realistic JDM watch example if the query happens to be blank
+    """Generates profitable dummy data formatted exactly like eBay's legacy API response."""
     item_name = query if query else "Seiko Astron SBXY061"
-    
-    # Set prices artificially low so your engine.py calculates a high profit margin.
-    # This ensures your minimum thresholds are met and your Discord alerts trigger.
     base_price = "700.00" if listing_type == "Auction" else "750.00"
-    
     return [
         {
             "itemId": [f"MOCK_{listing_type.upper()}_01"],
@@ -36,123 +38,156 @@ def _generate_mock_listings(query: str, listing_type: str):
         }
     ]
 
-def _get_headers(operation_name: str):
-    """Helper to generate headers for the eBay Finding API."""
-    return {
-        "X-EBAY-SOA-GLOBAL-ID": EBAY_GLOBAL_ID,
-        "X-EBAY-SOA-SECURITY-APPNAME": EBAY_APP_ID,
-        "X-EBAY-SOA-OPERATION-NAME": operation_name,
-        "X-EBAY-SOA-RESPONSE-DATA-FORMAT": "JSON",
+# Global cache for the OAuth token so we don't request a new one on every search
+_cached_token = None
+_token_expiry = None
+
+def _get_oauth_token():
+    global _cached_token, _token_expiry
+    
+    # Return the cached token if it is still valid
+    if _cached_token and _token_expiry and datetime.now() < _token_expiry:
+        return _cached_token
+
+    url = "https://api.ebay.com/identity/v1/oauth2/token"
+    credentials = f"{EBAY_APP_ID}:{EBAY_CERT_ID}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+    headers = {
+        "Authorization": f"Basic {encoded_credentials}",
+        "Content-Type": "application/x-www-form-urlencoded"
     }
+    data = {
+        "grant_type": "client_credentials",
+        "scope": "https://api.ebay.com/oauth/api_scope"
+    }
+
+    try:
+        response = requests.post(url, headers=headers, data=data)
+        if response.status_code == 200:
+            token_data = response.json()
+            _cached_token = token_data["access_token"]
+            
+            # Pad the expiration by 5 minutes (300 seconds) to be safe
+            expires_in = int(token_data.get("expires_in", 7200)) - 300
+            _token_expiry = datetime.now() + timedelta(seconds=expires_in)
+            return _cached_token
+        else:
+            print(f"Failed to generate eBay OAuth Token - Status {response.status_code}: {response.text}")
+            return None
+    except Exception as e:
+        print(f"Exception during eBay Token generation: {e}")
+        return None
+
+def _map_to_legacy(browse_items):
+    """
+    Converts the modern Browse API JSON response back into the heavily nested 
+    arrays used by the legacy Finding API, so we don't have to rewrite tasks.py.
+    """
+    legacy_items = []
+    for item in browse_items:
+        price = item.get("price", {}).get("value", "0.0")
+        
+        legacy_items.append({
+            "itemId": [item.get("itemId", "UNKNOWN")],
+            "title": [item.get("title", "No Title")],
+            "viewItemURL": [item.get("itemWebUrl", "")],
+            "sellingStatus": [{"currentPrice": [{"__value__": str(price)}]}]
+        })
+    return legacy_items
 
 def search_buy_it_now(query: str):
     if _is_mock_mode():
         return _generate_mock_listings(query, "FixedPrice")
 
-    url = "https://svcs.ebay.com/services/search/FindingService/v1"
-    headers = _get_headers("findItemsAdvanced")
-    
+    token = _get_oauth_token()
+    if not token:
+        return []
+
+    url = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_GB"
+    }
     params = {
-        "REST-PAYLOAD": "true",
-        "keywords": query,
-        "itemFilter(0).name": "ListingType",
-        "itemFilter(0).value": "FixedPrice",
-        "sortOrder": "PricePlusShippingLowest",
-        "paginationInput.entriesPerPage": 10
+        "q": query,
+        "filter": "buyingOptions:{FIXED_PRICE}",
+        "sort": "price",
+        "limit": 10
     }
     
-    response = requests.get(url, headers=headers, params=params).json()
-    items = response.get("findItemsAdvancedResponse", [{}])[0].get("searchResult", [{}])[0].get("item", [])
-    return items if isinstance(items, list) else []
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            items = data.get("itemSummaries", [])
+            return _map_to_legacy(items)
+        else:
+            print(f"Error parsing eBay API (BIN) - Status {response.status_code}: {response.text}")
+            return []
+    except Exception as e:
+        print(f"Exception during eBay BIN search: {e}")
+        return []
 
 def search_ending_soon_auctions(query: str):
     if _is_mock_mode():
         return _generate_mock_listings(query, "Auction")
 
-    url = "https://svcs.ebay.com/services/search/FindingService/v1"
-    headers = _get_headers("findItemsAdvanced")
-    
-    end_time = (datetime.now(timezone.utc) + timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
-    
+    token = _get_oauth_token()
+    if not token:
+        return []
+
+    url = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_GB"
+    }
     params = {
-        "REST-PAYLOAD": "true",
-        "keywords": query,
-        "itemFilter(0).name": "ListingType",
-        "itemFilter(0).value": "Auction",
-        "itemFilter(1).name": "EndTimeTo",
-        "itemFilter(1).value": end_time,
-        "sortOrder": "EndTimeSoonest",
-        "paginationInput.entriesPerPage": 10
+        "q": query,
+        "filter": "buyingOptions:{AUCTION}",
+        "sort": "-endingSoonest", # Modern API uses minus sign for sorting
+        "limit": 10
     }
     
-    response = requests.get(url, headers=headers, params=params).json()
-    items = response.get("findItemsAdvancedResponse", [{}])[0].get("searchResult", [{}])[0].get("item", [])
-    return items if isinstance(items, list) else []
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            items = data.get("itemSummaries", [])
+            return _map_to_legacy(items)
+        else:
+            print(f"Error parsing eBay API (Auctions) - Status {response.status_code}: {response.text}")
+            return []
+    except Exception as e:
+        print(f"Exception during eBay Auctions search: {e}")
+        return []
 
 def get_median_sold_price(query: str) -> float:
     if _is_mock_mode():
-        return 1500.0  # Artificially high to guarantee a positive arbitrage calculation during testing
+        return 1500.0  
         
-    url = "https://svcs.ebay.com/services/search/FindingService/v1"
-    headers = _get_headers("findCompletedItems") 
-    
+    if not COMPSNIPER_API_KEY:
+        print("Missing COMPSNIPER_API_KEY in environment variables.")
+        return 0.0
+
+    url = "https://api.compsniper.com/v1/scrape"
+    headers = {
+        "Authorization": f"Bearer {COMPSNIPER_API_KEY}"
+    }
     params = {
-        "REST-PAYLOAD": "true",
-        "keywords": query,
-        "itemFilter(0).name": "SoldItemsOnly",
-        "itemFilter(0).value": "true",
-        
-        # --- CLEANSING LAYER 1: API Condition Filtering ---
-        # 1000=New, 1500=Open Box, 2000=Cert. Refurbished, 2500=Seller Refurbished, 3000=Used
-        # This explicitly excludes 7000 (For Parts or Not Working)
-        "itemFilter(1).name": "Condition",
-        "itemFilter(1).value(0)": "1000",
-        "itemFilter(1).value(1)": "1500",
-        "itemFilter(1).value(2)": "2000",
-        "itemFilter(1).value(3)": "2500",
-        "itemFilter(1).value(4)": "3000",
-        
-        "sortOrder": "EndTimeSoonest",
-        "paginationInput.entriesPerPage": 50 
+        "keyword": query,
+        "count": 50
     }
     
-    response = requests.get(url, headers=headers, params=params).json()
-    items = response.get("findCompletedItemsResponse", [{}])[0].get("searchResult", [{}])[0].get("item", [])
-    
-    if not items or not isinstance(items, list):
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        if response.status_code != 200:
+            print(f"CompSniper API Error - Status {response.status_code}: {response.text}")
+            return 0.0
+            
+        data = response.json()
+        return float(data.get("summary", {}).get("median", 0.0))
+        
+    except Exception as e:
+        print(f"Failed to fetch sold data from CompSniper: {e}")
         return 0.0
-        
-    prices = []
-    for item in items:
-        try:
-            price_str = item.get("sellingStatus", [{}])[0].get("currentPrice", [{}])[0].get("__value__", "0")
-            price = float(price_str)
-            if price > 0:
-                prices.append(price)
-        except (ValueError, IndexError, TypeError):
-            continue
-            
-    # --- CLEANSING LAYER 2: Interquartile Range (IQR) Filtering ---
-    # We need at least 4 data points to reliably calculate quartiles
-    if len(prices) >= 4:
-        # Sort prices as required for quartile math
-        prices.sort()
-        
-        # Calculate Q1 (25th percentile) and Q3 (75th percentile)
-        q1, _, q3 = statistics.quantiles(prices, n=4)
-        iqr = q3 - q1
-        
-        # Define acceptable bounds using the standard 1.5x multiplier
-        lower_bound = q1 - (1.5 * iqr)
-        upper_bound = q3 + (1.5 * iqr)
-        
-        # Filter the raw prices against the bounds
-        cleaned_prices = [p for p in prices if lower_bound <= p <= upper_bound]
-        
-        # Fallback to raw prices if IQR filtering somehow removes everything
-        if not cleaned_prices:
-            cleaned_prices = prices
-    else:
-        cleaned_prices = prices
-            
-    return statistics.median(cleaned_prices) if cleaned_prices else 0.0
